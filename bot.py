@@ -56,9 +56,29 @@ def run_health_server():
     server.serve_forever()
 
 if __name__ == "__main__":
-    init_db()
-    # Запускаем health-check сервер в отдельном потоке
+    import threading
+    import os
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class HealthCheckHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is alive!")
+
+    def run_health_server():
+        port = int(os.environ.get("PORT", 10000))
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        server.serve_forever()
+
     threading.Thread(target=run_health_server, daemon=True).start()
-    # Запускаем бота
+    init_db()
     print("🤖 Telegram-бот запущен!")
+    
+    # Запускаем парсер в отдельном потоке
+    from parser import main as parser_main
+    threading.Thread(target=parser_main, daemon=True).start()
+
+    # Запускаем Telegram-бота
     bot.infinity_polling()
+    

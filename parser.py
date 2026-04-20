@@ -5,23 +5,25 @@ import os
 import re
 import sqlite3
 from bs4 import BeautifulSoup
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
+# --- Твои настройки ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-# ==========================================
-
-
-# Минимальный бюджет (в рублях)
 MIN_BUDGET = 2000
-
-# Файл для хранения уже отправленных заказов
 SENT_FILE = "sent_orders.json"
-# ==========================================
 
+KEYWORDS = [
+    "python", "flask", "fastapi", "postgresql", "sql", "sqlalchemy",
+    "бот", "telegram", "tg", "api", "парс", "скрипт", "парсер",
+    "регистрация", "авторизация", "база данных", "бд",
+    "деплой", "автоматизация", "excel", "csv", "json",
+    "парсинг", "сбор данных"
+]
+
+# --- БАЗА ДАННЫХ ---
 DB_FILE = "stats.db"
 
 def init_db():
@@ -35,149 +37,162 @@ def init_db():
 def add_order(order_id, platform, title, budget, link):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO orders VALUES (?, ?, ?, ?, ?, datetime('now'))",
-              (order_id, platform, title, budget, link))
+    c.execute(
+        "INSERT OR IGNORE INTO orders VALUES (?, ?, ?, ?, ?, datetime('now'))",
+        (order_id, platform, title, budget, link)
+    )
     conn.commit()
     conn.close()
 
-# Ключевые слова для поиска
-KEYWORDS = [
-    "python", "flask", "fastapi", "postgresql", "sql", "sqlalchemy",
-    "бот", "telegram", "tg", "api", "парс", "скрипт", "парсер",
-    "регистрация", "авторизация", "база данных", "бд", "деплой"
-]
+# --- ФУНКЦИЯ АВТООТКЛИКА ---
+def auto_respond(order_url):
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.service import Service
 
+    chrome_options = Options()
+    chrome_options.binary_location = r"C:\Users\Yagami Light\AppData\Local\Vivaldi\Application\vivaldi.exe"
+
+    chromedriver_path = r"C:\kwork_bot\chromedriver.exe"
+    service = Service(chromedriver_path)
+
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+
+    driver.get(order_url)
+    time.sleep(3)
+
+    try:
+        message_box = driver.find_element(By.NAME, "response")
+
+        template = (
+            "Здравствуйте! Сделаю под ключ. Мой стек: Python, Flask, парсинг, "
+            "Telegram-боты. Пример работы: веб-игра с регистрацией и БД "
+            "(ссылка в портфолио). Цена от 3000 ₽, срок 2–4 дня. Готов обсудить."
+        )
+
+        message_box.send_keys(template)
+
+        submit_button = driver.find_element(
+            By.XPATH, "//button[contains(text(), 'Откликнуться')]"
+        )
+        submit_button.click()
+
+        print(f"✅ Автоотклик отправлен на {order_url}")
+
+    except Exception as e:
+        print(f"❌ Ошибка при автоотклике: {e}")
+
+    time.sleep(2)
+    driver.quit()
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def load_sent_orders():
-    """Загружает список уже отправленных заказов"""
     if os.path.exists(SENT_FILE):
-        with open(SENT_FILE, "r", encoding="utf-8") as f:
+        with open(SENT_FILE, "r") as f:
             return set(json.load(f))
     return set()
 
 def save_sent_orders(sent_orders):
-    """Сохраняет список отправленных заказов"""
-    with open(SENT_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(sent_orders), f, ensure_ascii=False)
+    with open(SENT_FILE, "w") as f:
+        json.dump(list(sent_orders), f)
 
-def send_telegram(text):
-    """Отправляет сообщение в Telegram"""
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-    try:
-        requests.post(url, data=data, timeout=10)
-    except Exception as e:
-        print(f"Ошибка отправки в Telegram: {e}")
+    data = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    requests.post(url, data=data)
 
 def extract_budget(text):
-    """Извлекает бюджет из текста"""
-    patterns = [
-        r"(\d+[\s]?[\d]*)\s*[₽руб]",
-        r"бюджет[:]?\s*(\d+[\s]?[\d]*)",
-        r"до\s*(\d+[\s]?[\d]*)",
-        r"от\s*(\d+[\s]?[\d]*)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            num = int(match.group(1).replace(" ", ""))
-            return num
-    return None
+    match = re.search(r'(\d+)', text.replace(" ", ""))
+    return int(match.group(1)) if match else None
 
+# --- ПАРСИНГ KWORK ---
 def check_kwork():
-    """Проверяет заказы на Kwork"""
     url = "https://kwork.ru/projects"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response.text, "html.parser")
-        projects = soup.find_all("div", class_=re.compile("project-card"))
-        
-        for project in projects[:15]:
-            title_elem = project.find("a", class_=re.compile("title"))
-            if not title_elem:
-                continue
-                
-            title = title_elem.get_text(strip=True)
-            link = "https://kwork.ru" + title_elem.get("href", "")
-            order_id = f"kwork_{link.split('/')[-1]}"
-            
-            full_text = project.get_text()
-            budget = extract_budget(full_text)
-            
-            if budget and budget < MIN_BUDGET:
-                continue
-            
-            title_lower = title.lower()
-            for keyword in KEYWORDS:
-                if keyword in title_lower:
-                    return {
-                        "platform": "Kwork",
-                        "title": title[:100],
-                        "budget": budget,
-                        "link": link,
-                        "order_id": order_id
-                    }
-    except Exception as e:
-        print(f"Ошибка парсинга Kwork: {e}")
-    return None
+    headers = {"User-Agent": "Mozilla/5.0"}
 
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    project = soup.find("div", class_="project-card")
+    if not project:
+        return None
+
+    title = project.find("a").text.strip()
+    link = "https://kwork.ru" + project.find("a")["href"]
+
+    budget_text = project.text
+    budget = extract_budget(budget_text)
+
+    if budget and budget < MIN_BUDGET:
+        return None
+
+    if not any(k.lower() in title.lower() for k in KEYWORDS):
+        return None
+
+    order_id = link.split("/")[-1]
+
+    return {
+        "order_id": order_id,
+        "platform": "Kwork",
+        "title": title,
+        "budget": budget,
+        "link": link
+    }
+
+# --- ПАРСИНГ FL.RU ---
 def check_fl():
-    """Проверяет заказы на FL.ru"""
     url = "https://www.fl.ru/projects/"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response.text, "html.parser")
-        projects = soup.find_all("div", class_=re.compile("b-post"))
-        
-        for project in projects[:15]:
-            title_elem = project.find("a", class_=re.compile("post__title"))
-            if not title_elem:
-                continue
-            
-            title = title_elem.get_text(strip=True)
-            link = "https://www.fl.ru" + title_elem.get("href", "")
-            order_id = f"fl_{link.split('/')[-1]}"
-            
-            full_text = project.get_text()
-            budget = extract_budget(full_text)
-            
-            if budget and budget < MIN_BUDGET:
-                continue
-            
-            title_lower = title.lower()
-            for keyword in KEYWORDS:
-                if keyword in title_lower:
-                    return {
-                        "platform": "FL.ru",
-                        "title": title[:100],
-                        "budget": budget,
-                        "link": link,
-                        "order_id": order_id
-                    }
-    except Exception as e:
-        print(f"Ошибка парсинга FL.ru: {e}")
-    return None
+    headers = {"User-Agent": "Mozilla/5.0"}
 
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    project = soup.find("div", class_="b-post")
+    if not project:
+        return None
+
+    title = project.find("a").text.strip()
+    link = project.find("a")["href"]
+
+    budget_text = project.text
+    budget = extract_budget(budget_text)
+
+    if budget and budget < MIN_BUDGET:
+        return None
+
+    if not any(k.lower() in title.lower() for k in KEYWORDS):
+        return None
+
+    order_id = link.split("/")[-1]
+
+    return {
+        "order_id": order_id,
+        "platform": "FL",
+        "title": title,
+        "budget": budget,
+        "link": link
+    }
+
+# --- ГЛАВНЫЙ ЦИКЛ ---
 def main():
-    print("🚀 Парсер заказов запущен!")
-    print(f"💰 Минимальный бюджет: {MIN_BUDGET} ₽")
-    print(f"🔍 Ключевые слова: {', '.join(KEYWORDS)}")
-    print(f"⏱️  Проверка каждые 60 секунд (Kwork + FL.ru)")
-    print("-" * 50)
-    
+    print("🚀 Парсер с автооткликом запущен!")
+
     init_db()
-
     sent_orders = load_sent_orders()
-    
+
     while True:
-        # Проверяем Kwork
-        order = check_kwork()
-        if order and order["order_id"] not in sent_orders:
-            budget_str = f"{order['budget']} ₽" if order['budget'] else "Цена не указана"
-            message = f"""
+        for checker in [check_kwork, check_fl]:
+            order = checker()
+
+            if order and order["order_id"] not in sent_orders:
+                budget_str = f"{order['budget']} ₽" if order['budget'] else "Цена не указана"
+
+                message = f"""
 🔔 <b>НОВЫЙ ЗАКАЗ!</b>
 
 📌 <b>{order['platform']}</b> - {order['title']}
@@ -185,36 +200,24 @@ def main():
 💰 {budget_str}
 
 🔗 <a href="{order['link']}">Перейти к заказу</a>
-
-⏰ Откликайся быстро!
 """
-            send_telegram(message)
-            print(f"✅ Найден заказ на {order['platform']}: {order['title'][:50]}")
-            add_order(order["order_id"], order["platform"], order["title"], order["budget"], order["link"]) 
-            sent_orders.add(order["order_id"])
-            save_sent_orders(sent_orders)
-        
-        # Проверяем FL.ru
-        order = check_fl()
-        if order and order["order_id"] not in sent_orders:
-            budget_str = f"{order['budget']} ₽" if order['budget'] else "Цена не указана"
-            message = f"""
-🔔 <b>НОВЫЙ ЗАКАЗ!</b>
 
-📌 <b>{order['platform']}</b> - {order['title']}
+                send_telegram(message)
+                print(f"✅ Найден заказ: {order['title'][:50]}")
 
-💰 {budget_str}
+                auto_respond(order["link"])
 
-🔗 <a href="{order['link']}">Перейти к заказу</a>
+                add_order(
+                    order["order_id"],
+                    order["platform"],
+                    order["title"],
+                    order["budget"],
+                    order["link"]
+                )
 
-⏰ Откликайся быстро!
-"""
-            send_telegram(message)
-            print(f"✅ Найден заказ на {order['platform']}: {order['title'][:50]}")
-            add_order(order["order_id"], order["platform"], order["title"], order["budget"], order["link"]) 
-            sent_orders.add(order["order_id"])
-            save_sent_orders(sent_orders)
-        
+                sent_orders.add(order["order_id"])
+                save_sent_orders(sent_orders)
+
         time.sleep(60)
 
 if __name__ == "__main__":
