@@ -1,15 +1,17 @@
 import telebot
 import sqlite3
-import json
 import os
 from dotenv import load_dotenv
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# База данных для статистики
+bot = telebot.TeleBot(TOKEN)
+
 DB_FILE = "stats.db"
 
 def init_db():
@@ -17,14 +19,6 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS orders
                  (id TEXT PRIMARY KEY, platform TEXT, title TEXT, budget INTEGER, link TEXT, found_at TEXT)''')
-    conn.commit()
-    conn.close()
-
-def add_order(order_id, platform, title, budget, link):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO orders VALUES (?, ?, ?, ?, ?, datetime('now'))",
-              (order_id, platform, title, budget, link))
     conn.commit()
     conn.close()
 
@@ -50,7 +44,21 @@ def send_stats(message):
         text += f"• {platform}: {count}\n"
     bot.reply_to(message, text)
 
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
 if __name__ == "__main__":
     init_db()
+    # Запускаем health-check сервер в отдельном потоке
+    threading.Thread(target=run_health_server, daemon=True).start()
+    # Запускаем бота
     print("🤖 Telegram-бот запущен!")
     bot.infinity_polling()
